@@ -10,6 +10,9 @@ This is generally how I use it:
 main :: () {
 	sprofiler = init_spall_profiler(1024*1024*1024*2); // 2GB, Around about max that the spall wasm version can handle
 	// ...
+	
+	// Before I exit
+	spall_finalize();
 }
 
 foo :: () {
