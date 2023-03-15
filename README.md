@@ -6,26 +6,38 @@ This is only for the binary format.
 
 This is generally how I use it:
 
-```go
+```jai
+#add_context profiler: Spall_Profiler;
+
 main :: () {
-	sprofiler = init_spall_profiler(1024*1024*1024*2); // 2GB, Around about max that the spall wasm version can handle
+	context.profiler = make_spall_profiler("profile.spall", 10*1024*1024);
+	spall_begin(*context.profiler, "main");
 	// ...
 	
 	// Before I exit
-	spall_finalize();
+	spall_finalize(*context.profiler);
 }
 
+// Just so I don't have to write *context.profiler everytime
+Timed_Scope :: ($name: string) #expand #no_debug {
+	spall_begin(*context.profiler, name);
+	`defer spall_end(*context.profiler);
+}
+Timed_Begin :: ($name: string) #expand #no_debug {
+	spall_begin(*context.profiler, name);
+}
+Timed_End :: () #expand #no_debug {
+	spall_end(*context.profiler);
+}
 foo :: () {
-	spall_scope("foo"); // profiling the entire procedure from the top of the procedure
+	Timed_Scope("foo"); // profiling the entire procedure from the top of the procedure
 	// ...
 	{
-		spall_scope("other scope"); // profiling a sub-scope
+		Timed_Scope("other scope"); // profiling a sub-scope
 		// ...
 	}
-	spall_begin("load"); // profiling the same way as a sub-scope without making a scope
+	Timed_Begin("load"); // profiling the same way as a sub-scope without making a scope
 	// ...
-	spall_end(); // ending the spall_begin
+	Timed_End(); // ending the spall_begin
 }
 ```
-Pretty simple
-sprofiler is a global at the moment. We could add it to the context. Though I'm not really sure how standard of a thing that is.
