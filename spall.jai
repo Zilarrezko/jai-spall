@@ -1,104 +1,88 @@
+
 Spall_Profiler :: struct {
     mem: *u8;
     cur: s64;
     cap: s64;
     start_time: Apollo_Time;
-    on: bool;
     file: File;
-    mutex: Mutex;
 }
 
-
-make_spall_profiler :: (path: string, size: int, allocator := context.allocator) -> Spall_Profiler {
+init_spall_profiler :: (path: string, size: int, allocator := context.allocator) -> Spall_Profiler, bool {
     sp: Spall_Profiler;
     sp.mem = alloc(size, allocator);
     sp.cur = 0;
     sp.cap = size;
     sp.start_time = current_time_monotonic();
-    sp.on = true;
-    header: Spall_Header = .{SPALL_MAGIC, 1, 1.0, 0};
+    header: Spall_Header = .{MANUAL_SPALL_MAGIC, 1, 1.0, 0};
     memcpy(sp.mem, *header, size_of(Spall_Header));
     sp.cur += size_of(Spall_Header);
-    init(*sp.mutex);
+    init(*spall_mutex);
     ok: bool;
     sp.file, ok = file_open(path, for_writing=true, keep_existing_content=false);
-    if !ok {
-        print("ERROR: Couldn't open profile.spall file for writing.\n");
-        sp.on = false;
-    }
-    return sp;
+    return sp, ok;
 }
 
-
-spall_begin :: (sp: *Spall_Profiler, $$scope_name: string = "") {
-    if !sp.on {
-        return;
-    }
+spall_begin :: (profiler: *Spall_Profiler, $$scope_name: string = "") {
     event: Spall_Begin_Event = ---;
     event.type = .begin;
     event.category = 0;
     event.pid = 0;
     event.tid = context.thread_index;
-    event.time = cast(float64)to_microseconds(current_time_monotonic());
+    event.time = cast(float64)to_microseconds(current_time_monotonic() - profiler.start_time);
     event.name_len = cast(u8)scope_name.count;
     event.args_len = 0;
-    lock(*sp.mutex);
-    mem: *u8 = sp.mem + sp.cur;
+    lock(*spall_mutex);
+    if profiler.cur + size_of(Spall_Begin_Event) + scope_name.count > profiler.cap
+        spall_flush(profiler);
+    mem: *u8 = profiler.mem + profiler.cur;
     memcpy(mem, *event, size_of(Spall_Begin_Event));
     mem += size_of(Spall_Begin_Event);
     memcpy(mem, scope_name.data, scope_name.count);
     mem += scope_name.count;
-    sp.cur = mem - sp.mem;
-    unlock(*sp.mutex);
+    profiler.cur = mem - profiler.mem;
+    unlock(*spall_mutex);
 }
 
-
-spall_end :: (sp: *Spall_Profiler) {
-    if !sp.on {
-        return;
-    }
+spall_end :: (profiler: *Spall_Profiler) {
     event: Spall_End_Event = ---;
     event.type = .end;
     event.pid = 0;
     event.tid = context.thread_index;
-    event.time = cast(float64)to_microseconds(current_time_monotonic());
-    lock(*sp.mutex);
-    mem: *u8 = sp.mem + sp.cur;
+    event.time = cast(float64)to_microseconds(current_time_monotonic() - profiler.start_time);
+    lock(*spall_mutex);
+    if profiler.cur + size_of(Spall_End_Event) > profiler.cap
+        spall_flush(profiler);
+    mem: *u8 = profiler.mem + profiler.cur;
     memcpy(mem, *event, size_of(Spall_End_Event));
     mem += size_of(Spall_End_Event);
-    sp.cur = mem - sp.mem;
-    unlock(*sp.mutex);
+    profiler.cur = mem - profiler.mem;
+    unlock(*spall_mutex);
 }
 
-
-spall_scope :: (sp: *Spall_Profiler, $$scope_name: string) #expand #no_debug {
-    spall_begin(sp, scope_name);
-    `defer spall_end(sp);
+spall_scope :: (profiler: *Spall_Profiler, $$scope_name: string) #expand #no_debug {
+    spall_begin(profiler, scope_name);
+    `defer spall_end(profiler);
 }
 
-
-spall_flush :: (sp: *Spall_Profiler) {
-    if sp.on && sp.cur > 0 {
-        ok := file_write(*sp.file, sp.mem, sp.cur);
-        if !ok {
-            print("ERROR: Couldn't flush spall profiling data.\n");
-            // Turn off the profiler?
-        }
-        sp.cur = 0;
+spall_flush :: (profiler: *Spall_Profiler) -> bool {
+    ok := true;
+    if profiler.cur > 0 {
+        ok = file_write(*profiler.file, profiler.mem, profiler.cur);
+        profiler.cur = 0;
     }
+    return ok;
 }
 
-
-spall_destroy :: (sp: *Spall_Profiler) {
-    file_close(*sp.file);
+spall_finish :: (profiler: *Spall_Profiler) {
+    spall_flush(profiler);
+    file_close(*profiler.file);
 }
-
 
 #scope_file
 
-#import "Basic";  // Apollo_Time
-#import "Thread"; // Mutex
 #import "File";
+#import "Basic";
+#import "Thread";
 
 // Spall Binary
 Spall_Event_Type :: enum u8 {
@@ -111,15 +95,14 @@ Spall_Event_Type :: enum u8 {
     overwrite_timestamp :: 6;
 }
 
-
-SPALL_MAGIC :u64: 0x0BADF00D;
+MANUAL_SPALL_MAGIC :u64: 0x0BADF00D;
+NATIVE_SPALL_MAGIC :u64: 0xABADF00D;
 Spall_Header :: struct {
-    magic: u64 #align 1; // Expected 0x0BADF00D
+    magic: u64 #align 1; // Expected 0x0BADF00D or 0xABADF00D
     version: u64 #align 1; // currently version 1
     timestamp_unit: float64 #align 1; // 1 is 1 microsecond
     must_be_0: u64 #align 1;
 }
-
 
 Spall_Begin_Event :: struct {
     type: Spall_Event_Type #align 1;
@@ -129,9 +112,8 @@ Spall_Begin_Event :: struct {
     time: float64 #align 1;
     name_len: u8 #align 1; // If the name is 0-terminated, len must include the 0
     args_len: u8 #align 1;
-    // name will immediately follow
+    // name string will immediately follow
 }
-
 
 Spall_End_Event :: struct {
     type: Spall_Event_Type #align 1;
@@ -139,3 +121,5 @@ Spall_End_Event :: struct {
     tid: u32 #align 1;
     time: float64 #align 1;
 }
+
+spall_mutex: Mutex;

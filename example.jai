@@ -1,24 +1,27 @@
 
 // We'll want to add this to the context, unless we want to pass it around everywhere.
 // So for other threads you'll have to create the profiler before making the threads and
-// then passing the profiler in as thread data
-#add_context profiler: Spall_Profiler;
+// then passing the profiler in as thread data. In such a case, having only a pointer to pass
+// is a good idea
+#add_context profiler: *Spall_Profiler;
 
 main :: () {
-    context.profiler = make_spall_profiler("profile.spall", 10*1024*1024);
-    spall_begin(*context.profiler, "main");
+    profiler, ok := init_spall_profiler("profile.spall", 10*1024*1024);
+    assert(ok, "Couldn't initialize profiler");
+    context.profiler = New(Spall_Profiler);
+    context.profiler.* = profiler;
+    spall_begin(context.profiler, "main");
 
     example1();
     example2();
     example3();
 
-    spall_flush(*context.profiler);
-    spall_destroy(*context.profiler);
+    spall_flush(context.profiler);
+    spall_finish(context.profiler);
 }
 
-
 example1 :: () {
-    spall_scope(*context.profiler, "factorial");
+    spall_scope(context.profiler, "factorial");
     n :: 20;
     for i : 0..100_000 {
         f := 1;
@@ -28,9 +31,8 @@ example1 :: () {
     }
 }
 
-
 example2 :: () {
-    profiler := *context.profiler;
+    profiler := context.profiler;
     spall_scope(profiler, "fibonacci");
     a := 0;
     b := 1;
@@ -50,15 +52,17 @@ example2 :: () {
     }
 }
 
+// Maybe you want wrappers
+
 Timed_Scope :: ($name: string) #expand #no_debug {
-    spall_begin(*context.profiler, name);
-    `defer spall_end(*context.profiler);
+    spall_begin(context.profiler, name);
+    `defer spall_end(context.profiler);
 }
 Timed_Begin :: ($name: string) #expand #no_debug {
-    spall_begin(*context.profiler, name);
+    spall_begin(context.profiler, name);
 }
 Timed_End :: () #expand #no_debug {
-    spall_end(*context.profiler);
+    spall_end(context.profiler);
 }
 example3 :: () {
     Timed_Scope("prime_testing");
