@@ -21,7 +21,7 @@ main :: () {
 	spall_finish(context.profiler);
 }
 
-// Just so I don't have to write *context.profiler everytime
+// Just so I don't have to write context.profiler everytime
 Timed_Scope :: ($name: string) #expand #no_debug {
 	spall_begin(context.profiler, name);
 	`defer spall_end(context.profiler);
